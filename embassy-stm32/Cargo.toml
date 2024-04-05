@@ -95,13 +95,8 @@ critical-section = { version = "1.1", features = ["std"] }
 proc-macro2 = "1.0.36"
 quote = "1.0.15"
 
-<<<<<<< HEAD
 #stm32-metapac = { version = "15", default-features = false, features = ["metadata"]}
 stm32-metapac = { git = "https://github.com/embassy-rs/stm32-data-generated", tag = "stm32-data-2b7ec569a5510c324693f0515ac8ea20b12917a9", default-features = false, features = ["metadata"]}
-=======
-[patch."https://github.com/embassy-rs/stm32-data-generated"]
-stm32-metapac = { path = "../../stm32-data/build/stm32-metapac" }
->>>>>>> 7204ea87 (HSEM support for embassy-stm32)
 
 [features]
 default = ["rt"]
