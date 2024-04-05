@@ -4,9 +4,10 @@
 // Those MCUs have a different HSEM implementation (Secure semaphore lock support,
 // Privileged / unprivileged semaphore lock support, Semaphore lock protection via semaphore attribute),
 // which is not yet supported by this code.
+use embassy_hal_internal::{into_ref, PeripheralRef};
+
 use crate::rcc::RccPeripheral;
 use crate::{pac, Peripheral};
-use embassy_hal_internal::{into_ref, PeripheralRef};
 
 /// HSEM error.
 #[derive(Debug)]
@@ -59,7 +60,11 @@ impl<'d, T: Instance> HardwareSemaphore<'d, T> {
             w.set_lock(true);
         });
         let reg = T::regs().r(sem_id as usize).read();
-        match (reg.lock(), reg.coreid() == get_current_cpuid() as u8, reg.procid() == process_id) {
+        match (
+            reg.lock(),
+            reg.coreid() == get_current_cpuid() as u8,
+            reg.procid() == process_id,
+        ) {
             (true, true, true) => Ok(()),
             _ => Err(HsemError::LockFailed),
         }
