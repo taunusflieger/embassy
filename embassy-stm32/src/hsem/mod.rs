@@ -17,51 +17,56 @@ pub enum HsemError {
 }
 
 /// CPU core.
-/// See rm0399 table 95
+/// The enum values are identical to the bus master IDs / core Ids defined for each
+/// chip family (i.e. stm32h747 see rm0399 table 95)
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 #[repr(u8)]
 #[derive(defmt::Format)]
-pub enum Core {
+pub enum CoreId {
+    #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
     /// Cortex-M7, core 1.
-    #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
-    Cm7 = 0x3,
-    /// Cortex-M4, core 2.
-    #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
-    Cm4 = 0x1,
+    Core0 = 0x3,
 
-    // Cortex-M4, core 1.
+    #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
+    /// Cortex-M4, core 2.
+    Core1 = 0x1,
+
     #[cfg(not(any(stm32h745, stm32h747, stm32h755, stm32h757)))]
-    Cm4 = 0x4,
+    /// Cortex-M4, core 1
+    Core0 = 0x4,
+
+    #[cfg(any(stm32wb, stm32wl))]
     // Cortex-M0+, core 2.
-     #[cfg(any(stm32wb, stm32wl))]
-    Cm0p = 0x8,
+    Core1 = 0x8,
 }
 
-/// Get the current CPU core.
+/// Get the current core id
+/// This code assume that it is only executed on a Cortex-M M0+, M4 or M7 core.
 #[inline(always)]
-pub fn get_current_cpuid() -> Core {
+pub fn get_current_coreid() -> CoreId {
     let cpuid = unsafe { cortex_m::peripheral::CPUID::PTR.read_volatile().base.read() };
     match cpuid & 0x000000F0 {
          #[cfg(any(stm32wb, stm32wl))]
-        0x0 => Core::Cm0p,
-        0x4 => Core::Cm4,
-        0x7 => Core::Cm7,
-        _ => unreachable!(),
+        0x0 => CoreId::Core1,
+
+        #[cfg(not(any(stm32h745, stm32h747, stm32h755, stm32h757)))]
+        0x4 => CoreId::Core0,
+
+        #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
+        0x4 => CoreId::Core1,
+
+        #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
+        0x7 => CoreId::Core0,
+        _ => panic!("Unknown Cortex-M core"),
     }
 }
 
 /// Translates the core ID to an index into the interrupt registers.
 #[inline(always)]
-fn core_id_to_index(core: Core) -> usize {
+fn core_id_to_index(core: CoreId) -> usize {
     match core {
-        #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
-        Core::Cm7 => 0,
-        #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
-        Core::Cm4 => 1,
-        #[cfg(not(any(stm32h745, stm32h747, stm32h755, stm32h757)))]
-        Core::Cm4 => 0,
-        #[cfg(any(stm32wb, stm32wl))]
-        Core::Cm0p => 1,
+        CoreId::Core0 => 0,
+        CoreId::Core1 => 1,
     }
 }
 
@@ -83,13 +88,13 @@ impl<'d, T: Instance> HardwareSemaphore<'d, T> {
     pub fn two_step_lock(&mut self, sem_id: u8, process_id: u8) -> Result<(), HsemError> {
         T::regs().r(sem_id as usize).write(|w| {
             w.set_procid(process_id);
-            w.set_coreid(get_current_cpuid() as u8);
+            w.set_coreid(get_current_coreid() as u8);
             w.set_lock(true);
         });
         let reg = T::regs().r(sem_id as usize).read();
         match (
             reg.lock(),
-            reg.coreid() == get_current_cpuid() as u8,
+            reg.coreid() == get_current_coreid() as u8,
             reg.procid() == process_id,
         ) {
             (true, true, true) => Ok(()),
@@ -102,7 +107,7 @@ impl<'d, T: Instance> HardwareSemaphore<'d, T> {
     /// carried out from the HSEM_RLRx register.
     pub fn one_step_lock(&mut self, sem_id: u8) -> Result<(), HsemError> {
         let reg = T::regs().rlr(sem_id as usize).read();
-        match (reg.lock(), reg.coreid() == get_current_cpuid() as u8, reg.procid()) {
+        match (reg.lock(), reg.coreid() == get_current_coreid() as u8, reg.procid()) {
             (false, true, 0) => Ok(()),
             _ => Err(HsemError::LockFailed),
         }
@@ -114,7 +119,7 @@ impl<'d, T: Instance> HardwareSemaphore<'d, T> {
     pub fn unlock(&mut self, sem_id: u8, process_id: u8) {
         T::regs().r(sem_id as usize).write(|w| {
             w.set_procid(process_id);
-            w.set_coreid(get_current_cpuid() as u8);
+            w.set_coreid(get_current_coreid() as u8);
             w.set_lock(false);
         });
     }
@@ -146,14 +151,14 @@ impl<'d, T: Instance> HardwareSemaphore<'d, T> {
     }
 
     /// Sets the interrupt enable bit for the semaphore.
-    pub fn enable_interrupt(&mut self, core_id: Core, sem_x: usize, enable: bool) {
+    pub fn enable_interrupt(&mut self, core_id: CoreId, sem_x: usize, enable: bool) {
         T::regs()
             .ier(core_id_to_index(core_id))
             .modify(|w| w.set_ise(sem_x, enable));
     }
 
     /// Clears the interrupt flag for the semaphore.
-    pub fn clear_interrupt(&mut self, core_id: Core, sem_x: usize) {
+    pub fn clear_interrupt(&mut self, core_id: CoreId, sem_x: usize) {
         T::regs()
             .icr(core_id_to_index(core_id))
             .write(|w| w.set_isc(sem_x, false));
