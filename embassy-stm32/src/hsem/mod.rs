@@ -17,24 +17,51 @@ pub enum HsemError {
 }
 
 /// CPU core.
+/// See rm0399 table 95
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 #[repr(u8)]
 #[derive(defmt::Format)]
 pub enum Core {
     /// Cortex-M7, core 1.
+    #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
     Cm7 = 0x3,
     /// Cortex-M4, core 2.
+    #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
     Cm4 = 0x1,
+
+    // Cortex-M4, core 1.
+    #[cfg(not(any(stm32h745, stm32h747, stm32h755, stm32h757)))]
+    Cm4 = 0x4,
+    // Cortex-M0+, core 2.
+     #[cfg(any(stm32wb, stm32wl))]
+    Cm0p = 0x8,
 }
 
 /// Get the current CPU core.
 #[inline(always)]
 pub fn get_current_cpuid() -> Core {
     let cpuid = unsafe { cortex_m::peripheral::CPUID::PTR.read_volatile().base.read() };
-    if ((cpuid & 0x000000F0) >> 4) == 0x7 {
-        Core::Cm7
-    } else {
-        Core::Cm4
+    match cpuid & 0x000000F0 {
+         #[cfg(any(stm32wb, stm32wl))]
+        0x0 => Core::Cm0p,
+        0x4 => Core::Cm4,
+        0x7 => Core::Cm7,
+        _ => unreachable!(),
+    }
+}
+
+/// Translates the core ID to an index into the interrupt registers.
+#[inline(always)]
+fn core_id_to_index(core: Core) -> usize {
+    match core {
+        #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
+        Core::Cm7 => 0,
+        #[cfg(any(stm32h745, stm32h747, stm32h755, stm32h757))]
+        Core::Cm4 => 1,
+        #[cfg(not(any(stm32h745, stm32h747, stm32h755, stm32h757)))]
+        Core::Cm4 => 0,
+        #[cfg(any(stm32wb, stm32wl))]
+        Core::Cm0p => 1,
     }
 }
 
@@ -120,18 +147,16 @@ impl<'d, T: Instance> HardwareSemaphore<'d, T> {
 
     /// Sets the interrupt enable bit for the semaphore.
     pub fn enable_interrupt(&mut self, core_id: Core, sem_x: usize, enable: bool) {
-        match core_id {
-            Core::Cm7 => T::regs().c1ier().modify(|w| w.set_ise(sem_x, enable)),
-            Core::Cm4 => T::regs().c2ier().modify(|w| w.set_ise(sem_x, enable)),
-        }
+        T::regs()
+            .ier(core_id_to_index(core_id))
+            .modify(|w| w.set_ise(sem_x, enable));
     }
 
     /// Clears the interrupt flag for the semaphore.
     pub fn clear_interrupt(&mut self, core_id: Core, sem_x: usize) {
-        match core_id {
-            Core::Cm7 => T::regs().c1icr().write(|w| w.set_isc(sem_x, false)),
-            Core::Cm4 => T::regs().c2icr().write(|w| w.set_isc(sem_x, false)),
-        }
+        T::regs()
+            .icr(core_id_to_index(core_id))
+            .write(|w| w.set_isc(sem_x, false));
     }
 }
 
